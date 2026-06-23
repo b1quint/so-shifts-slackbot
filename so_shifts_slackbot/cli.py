@@ -1,7 +1,7 @@
 """CLI entrypoint for the Shifts Slack bot.
 
 Usage:
-    shifts-slackbot [--date YYYY-MM-DD] [--dry-run]
+    shifts-slackbot [--date YYYY-MM-DD] [--dry-run] [--sheet-only]
 
 Reads the Summary tab of the Unified Shift Schedule for the given date
 (default: today) and updates the configured Slack user groups.
@@ -38,7 +38,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print what would change without calling the Slack API.",
+        help="Resolve Slack users and print what would change, but do not update any groups.",
+    )
+    p.add_argument(
+        "--sheet-only",
+        action="store_true",
+        help="Read and print sheet assignments only — skip all Slack API calls.",
     )
     p.add_argument(
         "-v", "--verbose",
@@ -84,6 +89,9 @@ def main(argv: list[str] | None = None) -> None:
     for a in assignments:
         names = ", ".join(a.assignees) or "(none)"
         print(f"  [{a.group_handle}] {a.role}: {names}")
+
+    if args.sheet_only:
+        return
 
     result = sync(settings, assignments, dry_run=args.dry_run)
 
