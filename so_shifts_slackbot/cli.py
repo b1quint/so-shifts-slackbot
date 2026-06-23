@@ -18,6 +18,8 @@ import logging
 import sys
 from datetime import date
 
+from dotenv import load_dotenv
+
 from so_shifts_slackbot.config import Settings
 from so_shifts_slackbot.io.sheets import fetch_summary
 from so_shifts_slackbot.io.slack import sync
@@ -47,6 +49,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
+    load_dotenv()
     args = _parse_args(argv)
 
     logging.basicConfig(
@@ -69,21 +72,29 @@ def main(argv: list[str] | None = None) -> None:
             print(f"error: invalid date {args.date!r} — use YYYY-MM-DD", file=sys.stderr)
             sys.exit(1)
 
-    print(f"Reading Summary tab for {target_date or date.today()} …")
+    effective_date = target_date or date.today()
+    print(f"Reading Summary tab for {effective_date} …")
     assignments = fetch_summary(settings, target_date=target_date)
 
     if not assignments:
         print("No assignments found for that date.")
         sys.exit(0)
 
+    print("\nAssignments read from sheet:")
     for a in assignments:
         names = ", ".join(a.assignees) or "(none)"
-        print(f"  {a.role}: {names}")
+        print(f"  [{a.group_handle}] {a.role}: {names}")
 
     result = sync(settings, assignments, dry_run=args.dry_run)
 
-    if args.dry_run:
-        print("\n[dry-run] no changes written to Slack.")
+    print("\nSlack group updates:")
+    if result.updates:
+        for u in result.updates:
+            names = ", ".join(u.display_names)
+            tag = "[dry-run] " if args.dry_run else ""
+            print(f"  {tag}@{u.group_handle} → {names}")
+    else:
+        print("  (none)")
 
     for w in result.skipped:
         print(f"warning: {w}")
