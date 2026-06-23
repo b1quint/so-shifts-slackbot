@@ -3,13 +3,14 @@
 Uses the Slack Web API via slack_sdk. Required OAuth scopes for the bot token:
   - usergroups:read  (list groups, get members)
   - usergroups:write (update group membership)
-  - users:read       (look up users by display name / email)
-  - users:read.email (if matching by email)
+  - users:read       (look up users by display name / real name)
 """
 
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
+from datetime import date
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -31,7 +32,11 @@ def list_usergroups(client: WebClient) -> dict[str, str]:
 
 
 def list_users(client: WebClient) -> dict[str, str]:
-    """Return {display_name_lower: user_id} for all non-bot, non-deleted users."""
+    """Return {name_lower: user_id} for all non-bot, non-deleted users.
+
+    Indexes display_name, real_name, and their normalized variants so the
+    name matching is robust to minor profile differences.
+    """
     mapping: dict[str, str] = {}
     cursor = None
     while True:
@@ -58,10 +63,7 @@ def resolve_names(
     names: tuple[str, ...],
     user_map: dict[str, str],
 ) -> tuple[list[str], list[str]]:
-    """Match display names to Slack user IDs.
-
-    Returns (matched_ids, unmatched_names).
-    """
+    """Match full names to Slack user IDs. Returns (matched_ids, unmatched_names)."""
     matched, unmatched = [], []
     for name in names:
         uid = user_map.get(name.lower())
@@ -74,37 +76,29 @@ def resolve_names(
 
 def build_updates(
     assignments: list[ShiftAssignment],
-    settings: Settings,
     group_map: dict[str, str],
     user_map: dict[str, str],
 ) -> tuple[list[GroupUpdate], list[str]]:
-    """Map ShiftAssignments to GroupUpdates, resolving names to Slack IDs.
+    """Aggregate assignments by group handle and resolve names to Slack IDs.
 
-    Returns (updates, warnings).
+    Multiple roles can feed the same group (e.g. OS Night Shift Manager and
+    OS Late Shift both go to @os-night-shift). Returns (updates, warnings).
     """
-    # col_label -> group_handle
-    col_to_handle: dict[str, str] = {
-        col_label: handle
-        for handle, col_label in settings.summary_columns.items()
-    }
+    names_by_group: dict[str, list[str]] = defaultdict(list)
+    for a in assignments:
+        names_by_group[a.group_handle].extend(a.assignees)
 
     updates: list[GroupUpdate] = []
     warnings: list[str] = []
 
-    for assignment in assignments:
-        handle = col_to_handle.get(assignment.role)
-        if not handle:
-            warnings.append(f"no group handle for role {assignment.role!r}")
-            continue
+    for handle, names in names_by_group.items():
         group_id = group_map.get(handle)
         if not group_id:
             warnings.append(f"Slack group @{handle} not found in workspace")
             continue
-        member_ids, unmatched = resolve_names(assignment.assignees, user_map)
+        member_ids, unmatched = resolve_names(tuple(names), user_map)
         if unmatched:
-            warnings.append(
-                f"@{handle}: could not resolve Slack user(s): {', '.join(unmatched)}"
-            )
+            warnings.append(f"@{handle}: could not resolve Slack user(s): {', '.join(unmatched)}")
         if not member_ids:
             warnings.append(f"@{handle}: no members resolved — skipping update")
             continue
@@ -112,7 +106,7 @@ def build_updates(
             group_handle=handle,
             group_id=group_id,
             member_ids=tuple(member_ids),
-            display_names=assignment.assignees,
+            display_names=tuple(names),
         ))
     return updates, warnings
 
@@ -123,7 +117,7 @@ def apply_updates(
     *,
     dry_run: bool = False,
 ) -> list[str]:
-    """Push each GroupUpdate to Slack. Returns list of error strings."""
+    """Push each GroupUpdate to Slack. Returns list of API error strings."""
     errors: list[str] = []
     for update in updates:
         names = ", ".join(update.display_names)
@@ -150,16 +144,14 @@ def sync(
     client: WebClient | None = None,
     dry_run: bool = False,
 ) -> SyncResult:
-    """Top-level: take parsed sheet assignments and sync Slack groups."""
-    from datetime import date
-
+    """Sync parsed sheet assignments to Slack user groups."""
     client = client or make_client(settings)
     result = SyncResult(date=date.today())
 
     group_map = list_usergroups(client)
     user_map = list_users(client)
 
-    updates, warnings = build_updates(assignments, settings, group_map, user_map)
+    updates, warnings = build_updates(assignments, group_map, user_map)
     result.skipped.extend(warnings)
 
     errors = apply_updates(client, updates, dry_run=dry_run)

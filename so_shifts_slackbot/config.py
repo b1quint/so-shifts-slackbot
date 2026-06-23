@@ -1,6 +1,6 @@
 """Settings for the Slack bot — loaded from environment variables.
 
-All policy and tunables live here; nothing is hard-coded elsewhere.
+All policy and layout constants live here; nothing is hard-coded elsewhere.
 Load with ``Settings.from_env()`` at startup.
 """
 
@@ -11,33 +11,54 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class SummaryLayout:
+    """Physical layout of the Summary tab (all indices 0-based)."""
+
+    date_row: int = 1        # sheet row 2 — holds full date serials
+    date_col_start: int = 3  # column D — first date column
+
+    # {0-based row index: (human role label, slack group handle)}
+    role_rows: dict[int, tuple[str, str]] = field(default_factory=lambda: {
+        7:  ("OS Night Shift Manager",   "os-night-shift"),
+        8:  ("OS Late Shift",            "os-night-shift"),
+        9:  ("OS Day Shift Manager",     "os-day-shift"),
+        10: ("OS Day Shift",             "os-day-shift"),
+        15: ("Summit Support Scientist", "summit-sup-sci"),
+    })
+
+
+@dataclass
+class RosterLayout:
+    """Layout of a name↔initials roster within a tab (all indices 0-based)."""
+
+    start_row: int           # first data row
+    name_col: int = 0        # column A
+    initials_col: int = 1    # column B
+    row_stride: int = 2      # rows per person (vertically merged pairs)
+
+
+@dataclass
 class Settings:
     sheet_id: str = ""
     slack_bot_token: str = ""
 
     summary_tab_name: str = "Summary"
+    os_tab_name: str = "OS"
+    supsci_tab_name: str = "SupSci"
 
-    # Slack user group handles (without the @)
-    group_supsci: str = "summit-sup-sci"
-    group_day: str = "os-day-shift"
-    group_night: str = "os-night-shift"
+    summary_layout: SummaryLayout = field(default_factory=SummaryLayout)
 
-    # Map from group handle -> column label in the Summary tab that holds the assignee(s)
-    # Adjust once the real Summary tab layout is known.
-    summary_columns: dict[str, str] = field(default_factory=lambda: {
-        "summit-sup-sci": "SupSci",
-        "os-day-shift": "Day Shift",
-        "os-night-shift": "Night Shift",
-    })
+    # OS roster: names A12:A, initials B12:B → start_row=11 (0-based)
+    os_roster_layout: RosterLayout = field(default_factory=lambda: RosterLayout(start_row=11))
+
+    # SupSci roster: names A6:A, initials B6:B → start_row=5 (0-based)
+    supsci_roster_layout: RosterLayout = field(default_factory=lambda: RosterLayout(start_row=5))
 
     @classmethod
     def from_env(cls) -> Settings:
         s = cls()
         s.sheet_id = os.environ.get("SHIFT_SHEET_ID", "")
         s.slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-        s.group_supsci = os.environ.get("SLACK_GROUP_SUPSCI", s.group_supsci)
-        s.group_day = os.environ.get("SLACK_GROUP_DAY", s.group_day)
-        s.group_night = os.environ.get("SLACK_GROUP_NIGHT", s.group_night)
         return s
 
     def validate(self) -> None:
