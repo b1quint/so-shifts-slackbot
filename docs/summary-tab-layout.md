@@ -15,12 +15,18 @@ It is also the aggregation view used by humans to check daily coverage across al
 
 | Column(s) | Content |
 | --- | --- |
-| A | Row label (human-readable role or section name) |
-| B | *(purpose unclear — see open questions)* |
-| C | *(purpose unclear — see open questions)* |
+| A + B | Merged horizontally — human-readable row label (e.g. "OS Night Shift Manager") |
+| C | One-letter role code (e.g. `S` = Summit Science Support Shift) |
 | D → | One column per date, advancing right |
 
 Columns A–C are **static** (no date data). All date-bearing data starts at column D.
+
+The role code in column C is a compact identifier for each shift type. Known codes:
+
+| Code | Role |
+| --- | --- |
+| `S` | Summit Science Support Shift (SupSci) |
+| *(others TBD)* | OS roles — codes not yet confirmed |
 
 ---
 
@@ -33,41 +39,44 @@ Columns A–C are **static** (no date data). All date-bearing data starts at col
 | 3 | Day-of-week label (e.g. "Mon", "Tue") | No — derived from row 2 |
 
 Row 2 is the **date index**: fetch it with `UNFORMATTED_VALUE` to get the raw date serial,
-then convert via the Google Sheets origin (`1899-12-30 + serial days`). Formatted strings
-are also acceptable if the sheet is configured that way.
+then convert via the Google Sheets origin (`1899-12-30 + serial days`).
 
 ---
 
-## Data rows — roles and Slack group membership
+## Row layout (data rows)
+
+Rows 4, 7, 12, and 15 are **visual dividers** — ignore them programmatically.
+All data rows are **single rows** (no vertical merging in the Summary tab).
+A cell holding **`-`** means no one is assigned to that role on that date.
 
 ### OS Night Shift (`@os-night-shift`)
 
 Both rows 8 and 9 contribute members to the `@os-night-shift` Slack user group.
 
-| Row | Role label | Cell content | Notes |
-| --- | --- | --- | --- |
-| 8 | OS Night Shift Manager | Initials of the assigned OS | One person per date |
-| 9 | OS Late Shift | Initials of the assigned OS | One person per date |
+| Row | Role | Cell content |
+| --- | --- | --- |
+| 8 | OS Night Shift Manager | Initials of the assigned OS, or `-` |
+| 9 | OS Late Shift | Initials of the assigned OS, or `-` |
 
-The **combined** set of assignees from rows 8 and 9 on a given date is synced to
-`@os-night-shift`. Either row may be empty on a given date.
+The **combined** set of non-empty assignees from rows 8 and 9 on a given date is synced
+to `@os-night-shift`.
 
 ### OS Day Shift (`@os-day-shift`)
 
 Both rows 10 and 11 contribute members to the `@os-day-shift` Slack user group.
 
-| Row | Role label | Cell content | Notes |
-| --- | --- | --- | --- |
-| 10 | OS Day Shift Manager | Initials of the assigned OS | One person per date |
-| 11 | OS Day Shift | Initials of the assigned OS | One person per date |
+| Row | Role | Cell content |
+| --- | --- | --- |
+| 10 | OS Day Shift Manager | Initials of the assigned OS, or `-` |
+| 11 | OS Day Shift | Initials of the assigned OS, or `-` |
 
-The **combined** set of assignees from rows 10 and 11 is synced to `@os-day-shift`.
+The **combined** set of non-empty assignees from rows 10 and 11 is synced to `@os-day-shift`.
 
 ### Summit Support Scientist (`@summit-sup-sci`)
 
-| Row | Role label | Cell content | Notes |
-| --- | --- | --- | --- |
-| 16 | Summit Support Scientist | Initials of the assigned SupSci | One person per date |
+| Row | Role | Cell content |
+| --- | --- | --- |
+| 16 | Summit Support Scientist | Initials of the assigned SupSci, or `-` |
 
 A single person per date is synced to `@summit-sup-sci`.
 
@@ -85,16 +94,22 @@ to full names using two roster tabs, then matches full names to Slack users.
 | A | Full name | Row 12 |
 | B | Initials | Row 12 |
 
-Each person occupies **two rows merged vertically** in column A; the name appears in
-the top of the merged pair. Read until the first blank name cell.
+Each person occupies **two rows merged vertically** in column A (the merge pattern mirrors
+the SupSci availability tab). The name appears only in the top cell of each merged pair;
+the bottom cell is blank. Read pairs downward until the first blank name cell.
 
 Used for: rows 8, 9, 10, 11 in the Summary tab.
 
 ### SupSci roster — `SupSci` tab
 
-Initials-to-name mapping for Summit Support Scientists. *(Exact column/row layout
-to be confirmed — see open questions below. The SupSci tab layout is also documented
-in `so-shifts-supsci/docs/sheet-integration.md`.)*
+| Column | Content | Starting row |
+| --- | --- | --- |
+| A | Full name | Row 6 |
+| B | Initials | Row 6 |
+
+Each person occupies **two rows merged vertically** in column A (availability row + shift
+row, same as the rest of the SupSci tab). The name appears only in the top cell of each
+merged pair. Read pairs downward (rows 6, 8, 10, …) until the first blank name cell.
 
 Used for: row 16 in the Summary tab.
 
@@ -102,26 +117,7 @@ Used for: row 16 in the Summary tab.
 
 ## Open questions
 
-The following points were unclear when this document was written and need confirmation
-before the corresponding code can be finalized:
+One point still needs confirmation:
 
-1. **Columns B and C in the Summary tab.** What labels or data do they carry?
-   Are they used programmatically at all, or purely visual aids?
-
-2. **Rows 4–7 and 12–15.** Are any of these rows relevant to the bot, or are
-   they structural / empty / section dividers?
-
-3. **Vertical merging in the Summary tab.** The SupSci tab uses two rows per person
-   (availability row + shift row). Do the data rows in the Summary tab (8–11, 16)
-   follow any similar vertical-merge convention, or is each role truly a single row?
-
-4. **SupSci initials lookup.** In the `SupSci` tab, which column holds full names
-   and which holds initials? What is the starting row? (The SupSci tab layout is
-   documented for the availability/assignment grid, but the name↔initials index
-   within that tab is not yet confirmed.)
-
-5. **Multiple assignees.** Can a single date cell in rows 8–11 or 16 hold more than
-   one set of initials (e.g. a backup or co-assignment)? If so, what is the delimiter?
-
-6. **Empty cells.** When no one is assigned to a role on a given date, is the cell
-   blank, or does it hold a placeholder (e.g. `?` or `-`)?
+1. **Multiple assignees.** Can a single date cell in rows 8–11 or 16 hold more than one
+   set of initials (e.g. a backup or co-assignment)? If so, what is the delimiter between them?
