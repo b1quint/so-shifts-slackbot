@@ -48,6 +48,8 @@ then convert via the Google Sheets origin (`1899-12-30 + serial days`).
 Rows 4, 7, 12, and 15 are **visual dividers** — ignore them programmatically.
 All data rows are **single rows** (no vertical merging in the Summary tab).
 A cell holding **`-`** means no one is assigned to that role on that date.
+A cell holding **`!`** means multiple people are assigned to a single-person role — this is
+a data error in the sheet and should be flagged by any tool reading it, never silently processed.
 
 ### OS Night Shift (`@os-night-shift`)
 
@@ -113,11 +115,13 @@ merged pair. Read pairs downward (rows 6, 8, 10, …) until the first blank name
 
 Used for: row 16 in the Summary tab.
 
----
+### Cell value summary
 
-## Open questions
+| Value | Meaning |
+| --- | --- |
+| Initials (e.g. `BQ`) | Person assigned to this role on this date |
+| `-` | No one assigned — intentionally empty |
+| `!` | Data error — multiple people assigned to a single-person role; flag and skip |
 
-One point still needs confirmation:
-
-1. **Multiple assignees.** Can a single date cell in rows 8–11 or 16 hold more than one
-   set of initials (e.g. a backup or co-assignment)? If so, what is the delimiter between them?
+Each role cell holds **exactly one person's initials** (or `-` or `!`). There is no
+multi-value format; each role row represents a single assignment slot.
