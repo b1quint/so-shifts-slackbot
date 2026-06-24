@@ -200,6 +200,17 @@ def sync(
     else:
         user_map = list_users(client)
 
+    if settings.slack_group_overrides:
+        assignments = [
+            ShiftAssignment(
+                date=a.date,
+                role=a.role,
+                group_handle=settings.slack_group_overrides.get(a.group_handle, a.group_handle),
+                assignees=a.assignees,
+            )
+            for a in assignments
+        ]
+
     updates, warnings = build_updates(assignments, group_map, user_map)
     result.skipped.extend(warnings)
 

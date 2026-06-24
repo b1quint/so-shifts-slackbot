@@ -52,6 +52,11 @@ class Settings:
     # Used to scope user lookup to a small pool instead of the whole workspace.
     user_pool_groups: tuple[str, ...] = ("summit-sci", "os-team")
 
+    # Optional handle remapping: {canonical_handle: actual_handle}.
+    # Set via SLACK_GROUP_SUPSCI / SLACK_GROUP_DAY / SLACK_GROUP_NIGHT in .env.
+    # Useful for pointing at test groups without touching defaults.
+    slack_group_overrides: dict[str, str] = field(default_factory=dict)
+
     # OS roster: names A12:A, initials B12:B → start_row=11 (0-based)
     os_roster_layout: RosterLayout = field(default_factory=lambda: RosterLayout(start_row=11))
 
@@ -63,6 +68,12 @@ class Settings:
         s = cls()
         s.sheet_id = os.environ.get("SHIFT_SHEET_ID", "")
         s.slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
+        overrides = {
+            "summit-sup-sci": os.environ.get("SLACK_GROUP_SUPSCI", ""),
+            "os-day-shift":   os.environ.get("SLACK_GROUP_DAY", ""),
+            "os-night-shift": os.environ.get("SLACK_GROUP_NIGHT", ""),
+        }
+        s.slack_group_overrides = {k: v for k, v in overrides.items() if v}
         return s
 
     def validate(self) -> None:
