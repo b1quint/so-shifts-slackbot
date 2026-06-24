@@ -8,6 +8,7 @@ dependencies = [
     "gspread>=6.0",
     "google-auth-oauthlib>=1.2",
     "slack-sdk>=3.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]

@@ -1,7 +1,7 @@
 """CLI entrypoint for the Shifts Slack bot.
 
 Usage:
-    shifts-slackbot [--date YYYY-MM-DD] [--dry-run]
+    shifts-slackbot [--date YYYY-MM-DD] [--dry-run] [--sheet-only]
 
 Reads the Summary tab of the Unified Shift Schedule for the given date
 (default: today) and updates the configured Slack user groups.
@@ -18,9 +18,11 @@ import logging
 import sys
 from datetime import date
 
+from dotenv import load_dotenv
+
 from so_shifts_slackbot.config import Settings
 from so_shifts_slackbot.io.sheets import fetch_summary
-from so_shifts_slackbot.io.slack import sync
+from so_shifts_slackbot.io.slack import make_client, post_result, sync
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -36,7 +38,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print what would change without calling the Slack API.",
+        help="Resolve Slack users and print what would change, but do not update any groups.",
+    )
+    p.add_argument(
+        "--sheet-only",
+        action="store_true",
+        help="Read and print sheet assignments only — skip all Slack API calls.",
     )
     p.add_argument(
         "-v", "--verbose",
@@ -47,6 +54,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
+    load_dotenv()
     args = _parse_args(argv)
 
     logging.basicConfig(
@@ -69,26 +77,40 @@ def main(argv: list[str] | None = None) -> None:
             print(f"error: invalid date {args.date!r} — use YYYY-MM-DD", file=sys.stderr)
             sys.exit(1)
 
-    print(f"Reading Summary tab for {target_date or date.today()} …")
+    effective_date = target_date or date.today()
+    print(f"Reading Summary tab for {effective_date} …")
     assignments = fetch_summary(settings, target_date=target_date)
 
     if not assignments:
         print("No assignments found for that date.")
         sys.exit(0)
 
+    print("\nAssignments read from sheet:")
     for a in assignments:
         names = ", ".join(a.assignees) or "(none)"
-        print(f"  {a.role}: {names}")
+        print(f"  [{a.group_handle}] {a.role}: {names}")
+
+    if args.sheet_only:
+        return
 
     result = sync(settings, assignments, dry_run=args.dry_run)
 
-    if args.dry_run:
-        print("\n[dry-run] no changes written to Slack.")
+    print("\nSlack group updates:")
+    if result.updates:
+        for u in result.updates:
+            names = ", ".join(u.display_names)
+            tag = "[dry-run] " if args.dry_run else ""
+            print(f"  {tag}@{u.group_handle} → {names}")
+    else:
+        print("  (none)")
 
     for w in result.skipped:
         print(f"warning: {w}")
     for e in result.errors:
         print(f"error: {e}", file=sys.stderr)
+
+    if settings.slack_status_channel and not args.dry_run:
+        post_result(make_client(settings), settings.slack_status_channel, result)
 
     if result.errors:
         sys.exit(1)

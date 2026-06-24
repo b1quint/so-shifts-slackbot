@@ -1,53 +1,185 @@
-"""Google Sheets adapter — read the Summary tab.
+"""Google Sheets adapter — read the Summary tab and roster tabs.
 
-This is the only module that imports gspread. It returns plain Python objects
-so the rest of the bot never touches the Sheets API.
+This is the only module that imports gspread. All parsing functions are pure
+(take plain grids, return plain objects) so they are unit-testable without auth.
 
-Auth is OAuth user credentials via gspread.oauth() — authorize once in a
-browser, token cached at ~/.config/gspread/. The spreadsheet id comes from
-Settings.sheet_id (loaded from SHIFT_SHEET_ID env var).
+Auth: OAuth user credentials via gspread.oauth() — authorize once in a browser,
+token cached at ~/.config/gspread/. Spreadsheet id from Settings.sheet_id.
+
+Cells are fetched with UNFORMATTED_VALUE so date cells come back as integer
+serials, converted by _to_date() via the Google Sheets origin (1899-12-30).
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import gspread
 from gspread.utils import ValueRenderOption
 
-from so_shifts_slackbot.config import Settings
+from so_shifts_slackbot.config import RosterLayout, Settings, SummaryLayout
 from so_shifts_slackbot.models import ShiftAssignment
 
+logger = logging.getLogger(__name__)
+
+_SHEETS_ORIGIN = date(1899, 12, 30)
+_EMPTY = {"-", ""}
+_ERROR = {"!"}
+
+
+def _normalize_name(name: str) -> str:
+    """Flip 'Surname, Given' to 'Given Surname' for consistent name format."""
+    if "," in name:
+        surname, given = name.split(",", 1)
+        return f"{given.strip()} {surname.strip()}"
+    return name
+
+
+# ---------------------------------------------------------------------------
+# Low-level helpers
+# ---------------------------------------------------------------------------
+
+def _stringify(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def _to_date(value: str) -> date | None:
+    """Convert a stringified Sheets cell to a date.
+
+    Handles integer serials (stored as "46196" or "46196.0"), ISO strings,
+    and a few common formatted strings.
+    """
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return _SHEETS_ORIGIN + timedelta(days=int(float(value)))
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def fetch_grid(worksheet: gspread.Worksheet) -> list[list[str]]:
+    """Fetch a worksheet as a stringified grid with UNFORMATTED_VALUE."""
+    raw = worksheet.get_all_values(value_render_option=ValueRenderOption.unformatted)
+    return [[_stringify(cell) for cell in row] for row in raw]
+
+
+# ---------------------------------------------------------------------------
+# Pure parsing — no gspread, testable with fixture grids
+# ---------------------------------------------------------------------------
+
+def parse_roster(grid: list[list[str]], layout: RosterLayout) -> dict[str, str]:
+    """Build {initials: full_name} from a two-rows-per-person roster grid.
+
+    Reads every ``layout.row_stride`` rows starting at ``layout.start_row``,
+    taking the name from ``layout.name_col`` and initials from
+    ``layout.initials_col``. Stops at the first blank name cell.
+    """
+    result: dict[str, str] = {}
+    row = layout.start_row
+    while row < len(grid):
+        name = grid[row][layout.name_col].strip() if layout.name_col < len(grid[row]) else ""
+        if not name:
+            break
+        initials = grid[row][layout.initials_col].strip() if layout.initials_col < len(grid[row]) else ""
+        if initials:
+            result[initials] = _normalize_name(name)
+        row += layout.row_stride
+    return result
+
+
+def parse_date_row(
+    grid: list[list[str]],
+    date_row: int,
+    col_start: int,
+) -> dict[int, date]:
+    """Return {col_index: date} for every parseable date in the date header row."""
+    if date_row >= len(grid):
+        return {}
+    result: dict[int, date] = {}
+    for col, cell in enumerate(grid[date_row]):
+        if col < col_start:
+            continue
+        d = _to_date(cell)
+        if d is not None:
+            result[col] = d
+    return result
+
+
+def parse_summary_grid(
+    summary: list[list[str]],
+    os_roster: dict[str, str],
+    supsci_roster: dict[str, str],
+    target_date: date,
+    layout: SummaryLayout,
+) -> tuple[list[ShiftAssignment], list[str]]:
+    """Extract shift assignments for ``target_date`` from the raw Summary grid.
+
+    Returns ``(assignments, warnings)``. Warnings are non-fatal issues such as
+    unknown initials or data errors (``!``) in the sheet. The caller decides
+    whether to log or surface them.
+    """
+    col_by_date = {d: col for col, d in parse_date_row(summary, layout.date_row, layout.date_col_start).items()}
+
+    if target_date not in col_by_date:
+        return [], []
+
+    col = col_by_date[target_date]
+    assignments: list[ShiftAssignment] = []
+    warnings: list[str] = []
+
+    for row_idx, (role_label, group_handle) in layout.role_rows.items():
+        if row_idx >= len(summary):
+            continue
+        row = summary[row_idx]
+        if col >= len(row):
+            continue
+
+        cell = row[col].strip()
+
+        if cell in _EMPTY:
+            continue
+
+        if cell in _ERROR:
+            warnings.append(
+                f"sheet error on {target_date}, row {row_idx + 1} ({role_label}): "
+                f"'!' indicates multiple assignees in a single-person role"
+            )
+            continue
+
+        roster = supsci_roster if group_handle == "summit-sup-sci" else os_roster
+        full_name = roster.get(cell)
+        if full_name is None:
+            warnings.append(
+                f"unknown initials '{cell}' on {target_date}, row {row_idx + 1} ({role_label}): "
+                f"not found in roster"
+            )
+            continue
+
+        assignments.append(ShiftAssignment(
+            date=target_date,
+            role=role_label,
+            group_handle=group_handle,
+            assignees=(full_name,),
+        ))
+
+    return assignments, warnings
+
+
+# ---------------------------------------------------------------------------
+# Network entry point
+# ---------------------------------------------------------------------------
 
 def authorize(settings: Settings) -> gspread.Client:
     return gspread.oauth()
-
-
-def _to_date(value: Any) -> date | None:
-    """Convert a Sheets cell value to a date.
-
-    The Summary tab may store dates as serial numbers (integer days since
-    1899-12-30), as formatted strings, or as ISO strings depending on how
-    the sheet is set up. We handle the common cases.
-    """
-    if value is None or value == "":
-        return None
-    if isinstance(value, (int, float)):
-        # Google Sheets serial: days since 1899-12-30
-        from datetime import timedelta
-        origin = date(1899, 12, 30)
-        return origin + timedelta(days=int(value))
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%b %d, %Y", "%B %d, %Y"):
-            try:
-                return datetime.strptime(value, fmt).date()
-            except ValueError:
-                continue
-    return None
 
 
 def fetch_summary(
@@ -56,73 +188,28 @@ def fetch_summary(
     client: gspread.Client | None = None,
     target_date: date | None = None,
 ) -> list[ShiftAssignment]:
-    """Read the Summary tab and return shift assignments for ``target_date``.
+    """Read the Summary, OS, and SupSci tabs and return assignments for ``target_date``.
 
-    If ``target_date`` is None, uses today.
-
-    The Summary tab is expected to have dates in one column (or row) and
-    shift roles in adjacent columns. The exact layout is adapted in
-    ``_parse_summary``; adjust that function once the real layout is known.
+    Logs any roster or data warnings. Raises ``ValueError`` if the spreadsheet
+    id is missing.
     """
     if not settings.sheet_id:
         raise ValueError("SHIFT_SHEET_ID is required.")
     target_date = target_date or date.today()
     client = client or authorize(settings)
     spreadsheet = client.open_by_key(settings.sheet_id)
-    worksheet = spreadsheet.worksheet(settings.summary_tab_name)
-    raw = worksheet.get_all_values(value_render_option=ValueRenderOption.unformatted)
-    return _parse_summary(raw, target_date, settings)
 
+    summary_grid = fetch_grid(spreadsheet.worksheet(settings.summary_tab_name))
+    os_grid = fetch_grid(spreadsheet.worksheet(settings.os_tab_name))
+    supsci_grid = fetch_grid(spreadsheet.worksheet(settings.supsci_tab_name))
 
-def _parse_summary(
-    raw: list[list[Any]],
-    target_date: date,
-    settings: Settings,
-) -> list[ShiftAssignment]:
-    """Extract assignments for ``target_date`` from the raw Summary grid.
+    os_roster = parse_roster(os_grid, settings.os_roster_layout)
+    supsci_roster = parse_roster(supsci_grid, settings.supsci_roster_layout)
 
-    IMPORTANT: this function is a STUB. The real Summary tab layout is not
-    yet known. Update this once you can inspect the actual sheet structure.
+    assignments, warnings = parse_summary_grid(
+        summary_grid, os_roster, supsci_roster, target_date, settings.summary_layout
+    )
+    for w in warnings:
+        logger.warning(w)
 
-    Current assumption: the first row is a header with role names; the first
-    column holds dates. Each data cell holds the assignee name (or names,
-    comma-separated).
-    """
-    if not raw:
-        return []
-
-    header = [str(c).strip() for c in raw[0]]
-    role_cols = {
-        role: header.index(col_label)
-        for col_label in settings.summary_columns.values()
-        for role in [col_label]
-        if col_label in header
-    }
-
-    # Invert: col_label -> group_handle
-    col_to_group: dict[str, str] = {
-        col_label: handle
-        for handle, col_label in settings.summary_columns.items()
-    }
-
-    assignments: list[ShiftAssignment] = []
-    for row in raw[1:]:
-        if not row:
-            continue
-        row_date = _to_date(row[0])
-        if row_date != target_date:
-            continue
-        for col_label, col_idx in role_cols.items():
-            if col_idx >= len(row):
-                continue
-            cell = str(row[col_idx]).strip()
-            if not cell:
-                continue
-            names = tuple(n.strip() for n in cell.split(",") if n.strip())
-            group_handle = col_to_group.get(col_label, col_label)
-            assignments.append(ShiftAssignment(
-                date=target_date,
-                role=col_label,
-                assignees=names,
-            ))
     return assignments
