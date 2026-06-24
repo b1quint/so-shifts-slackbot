@@ -57,6 +57,10 @@ class Settings:
     # Useful for pointing at test groups without touching defaults.
     slack_group_overrides: dict[str, str] = field(default_factory=dict)
 
+    # Channel to post a run summary to (e.g. "C12345678" or "#shifts-bot").
+    # Leave empty to skip posting.
+    slack_status_channel: str = ""
+
     # OS roster: names A12:A, initials B12:B → start_row=11 (0-based)
     os_roster_layout: RosterLayout = field(default_factory=lambda: RosterLayout(start_row=11))
 
@@ -74,6 +78,7 @@ class Settings:
             "os-night-shift": os.environ.get("SLACK_GROUP_NIGHT", ""),
         }
         s.slack_group_overrides = {k: v for k, v in overrides.items() if v}
+        s.slack_status_channel = os.environ.get("SLACK_STATUS_CHANNEL", "")
         return s
 
     def validate(self) -> None:

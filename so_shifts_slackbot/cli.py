@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 from so_shifts_slackbot.config import Settings
 from so_shifts_slackbot.io.sheets import fetch_summary
-from so_shifts_slackbot.io.slack import sync
+from so_shifts_slackbot.io.slack import make_client, post_result, sync
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -108,6 +108,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"warning: {w}")
     for e in result.errors:
         print(f"error: {e}", file=sys.stderr)
+
+    if settings.slack_status_channel and not args.dry_run:
+        post_result(make_client(settings), settings.slack_status_channel, result)
 
     if result.errors:
         sys.exit(1)

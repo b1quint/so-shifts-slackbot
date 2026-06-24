@@ -177,6 +177,45 @@ def apply_updates(
     return errors
 
 
+def post_result(
+    client: WebClient,
+    channel: str,
+    result: SyncResult,
+) -> None:
+    """Post a one-line run summary to a Slack channel, with detail in a thread."""
+    if result.errors:
+        emoji = ":x:"
+        summary = f"{emoji} Shift sync failed for {result.date} — see thread"
+    elif result.skipped:
+        emoji = ":warning:"
+        summary = f"{emoji} Shifts synced for {result.date} — warnings, see thread"
+    else:
+        emoji = ":white_check_mark:"
+        groups = ", ".join(f"@{u.group_handle}" for u in result.updates) or "nothing to update"
+        summary = f"{emoji} Shifts synced for {result.date} — {groups}"
+
+    try:
+        resp = client.chat_postMessage(channel=channel, text=summary)
+        ts = resp["ts"]
+    except SlackApiError as exc:
+        logger.error("Could not post run summary: %s", exc.response["error"])
+        return
+
+    thread_lines = [f"@{u.group_handle} → {', '.join(u.display_names)}" for u in result.updates]
+    thread_lines += [f":warning: {w}" for w in result.skipped]
+    thread_lines += [f":x: {e}" for e in result.errors]
+
+    if thread_lines:
+        try:
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=ts,
+                text="\n".join(thread_lines),
+            )
+        except SlackApiError as exc:
+            logger.error("Could not post thread detail: %s", exc.response["error"])
+
+
 def sync(
     settings: Settings,
     assignments: list[ShiftAssignment],
