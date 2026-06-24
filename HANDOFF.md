@@ -5,9 +5,9 @@ Current branch: `minimum-valuable-product` → merged to `main`.
 ## What works (verified end-to-end)
 
 ```
-❯ uv run shifts-slackbot --date 2026-06-23
+❯ uv run shifts-slackbot --date YYYY-MM-DD
 
-Reading Summary tab for 2026-06-23 …
+Reading Summary tab for YYYY-MM-DD …
 
 Assignments read from sheet:
   [os-night-shift] OS Night Shift Manager: <name>
