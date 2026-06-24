@@ -1,9 +1,6 @@
 name: Daily Shift Sync
 
 on:
-  push:
-    branches:
-      - feat-github-actions-daily-sync  # remove before merging
   schedule:
     - cron: '0 12 * * *'  # 12:00 UTC — ~08:00 Chile time (see docs/github-actions.md)
   workflow_dispatch:        # manual trigger from the Actions tab
