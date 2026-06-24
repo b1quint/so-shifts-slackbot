@@ -71,11 +71,11 @@ def test_parse_date_row_missing_row_returns_empty():
 # ---------------------------------------------------------------------------
 
 def test_normalize_name_flips_surname_given():
-    assert _normalize_name("<name>") == "<name>"
+    assert _normalize_name("Jones, Alice") == "Alice Jones"
 
 
 def test_normalize_name_passthrough_when_no_comma():
-    assert _normalize_name("<name>") == "<name>"
+    assert _normalize_name("Alice Jones") == "Alice Jones"
 
 
 def test_normalize_name_trims_whitespace():
@@ -120,12 +120,12 @@ def test_parse_roster_empty_grid():
 def test_parse_roster_normalizes_comma_format():
     grid = [[""] * 3 for _ in range(11)]
     grid += [
-        ["<name>", "KK", ""],
+        ["Jones, Alice", "AJ", ""],
         ["", "", ""],
         ["", "", ""],
     ]
     roster = parse_roster(grid, RosterLayout(start_row=11))
-    assert roster == {"KK": "<name>"}
+    assert roster == {"AJ": "Alice Jones"}
 
 
 # ---------------------------------------------------------------------------
