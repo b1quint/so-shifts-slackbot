@@ -4,6 +4,7 @@ from datetime import date
 
 from so_shifts_slackbot.config import RosterLayout, SummaryLayout
 from so_shifts_slackbot.io.sheets import (
+    _normalize_name,
     _to_date,
     parse_date_row,
     parse_roster,
@@ -66,6 +67,22 @@ def test_parse_date_row_missing_row_returns_empty():
 
 
 # ---------------------------------------------------------------------------
+# _normalize_name
+# ---------------------------------------------------------------------------
+
+def test_normalize_name_flips_surname_given():
+    assert _normalize_name("<name>") == "<name>"
+
+
+def test_normalize_name_passthrough_when_no_comma():
+    assert _normalize_name("<name>") == "<name>"
+
+
+def test_normalize_name_trims_whitespace():
+    assert _normalize_name("Smith ,  Alice ") == "Alice Smith"
+
+
+# ---------------------------------------------------------------------------
 # parse_roster
 # ---------------------------------------------------------------------------
 
@@ -98,6 +115,17 @@ def test_parse_roster_stops_at_blank_name():
 
 def test_parse_roster_empty_grid():
     assert parse_roster([], RosterLayout(start_row=0)) == {}
+
+
+def test_parse_roster_normalizes_comma_format():
+    grid = [[""] * 3 for _ in range(11)]
+    grid += [
+        ["<name>", "KK", ""],
+        ["", "", ""],
+        ["", "", ""],
+    ]
+    roster = parse_roster(grid, RosterLayout(start_row=11))
+    assert roster == {"KK": "<name>"}
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,14 @@ _EMPTY = {"-", ""}
 _ERROR = {"!"}
 
 
+def _normalize_name(name: str) -> str:
+    """Flip 'Surname, Given' to 'Given Surname' for consistent name format."""
+    if "," in name:
+        surname, given = name.split(",", 1)
+        return f"{given.strip()} {surname.strip()}"
+    return name
+
+
 # ---------------------------------------------------------------------------
 # Low-level helpers
 # ---------------------------------------------------------------------------
@@ -83,7 +91,7 @@ def parse_roster(grid: list[list[str]], layout: RosterLayout) -> dict[str, str]:
             break
         initials = grid[row][layout.initials_col].strip() if layout.initials_col < len(grid[row]) else ""
         if initials:
-            result[initials] = name
+            result[initials] = _normalize_name(name)
         row += layout.row_stride
     return result
 

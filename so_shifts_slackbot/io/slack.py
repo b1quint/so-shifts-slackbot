@@ -9,6 +9,7 @@ Uses the Slack Web API via slack_sdk. Required OAuth scopes for the bot token:
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from datetime import date
 
@@ -19,6 +20,13 @@ from so_shifts_slackbot.config import Settings
 from so_shifts_slackbot.models import GroupUpdate, ShiftAssignment, SyncResult
 
 logger = logging.getLogger(__name__)
+
+_PARENTHETICAL = re.compile(r"\s*\(.*\)\s*$")
+
+
+def _index_name(name: str) -> str:
+    """Lowercase and strip trailing parentheticals for robust name matching."""
+    return _PARENTHETICAL.sub("", name).strip().lower()
 
 
 def make_client(settings: Settings) -> WebClient:
@@ -50,12 +58,44 @@ def list_users(client: WebClient) -> dict[str, str]:
             uid = member["id"]
             profile = member.get("profile", {})
             for key in ("display_name", "real_name", "display_name_normalized", "real_name_normalized"):
-                name = profile.get(key, "").strip().lower()
+                name = _index_name(profile.get(key, ""))
                 if name:
                     mapping[name] = uid
         cursor = response.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
+    return mapping
+
+
+def list_users_from_groups(
+    client: WebClient,
+    group_ids: list[str],
+) -> dict[str, str]:
+    """Return {name_lower: user_id} for members of the given group IDs.
+
+    Fetches member lists via usergroups.users.list, then resolves each unique
+    user ID via users.info. Much faster than paginating the whole workspace.
+    """
+    uid_set: set[str] = set()
+    for group_id in group_ids:
+        response = client.usergroups_users_list(usergroup=group_id)
+        uid_set.update(response.get("users", []))
+
+    mapping: dict[str, str] = {}
+    for uid in uid_set:
+        try:
+            response = client.users_info(user=uid)
+        except SlackApiError as exc:
+            logger.warning("Could not fetch user %s: %s", uid, exc.response["error"])
+            continue
+        member = response["user"]
+        if member.get("deleted") or member.get("is_bot"):
+            continue
+        profile = member.get("profile", {})
+        for key in ("display_name", "real_name", "display_name_normalized", "real_name_normalized"):
+            name = _index_name(profile.get(key, ""))
+            if name:
+                mapping[name] = uid
     return mapping
 
 
@@ -149,7 +189,16 @@ def sync(
     result = SyncResult(date=date.today())
 
     group_map = list_usergroups(client)
-    user_map = list_users(client)
+
+    pool_ids = [group_map[h] for h in settings.user_pool_groups if h in group_map]
+    missing_pools = [h for h in settings.user_pool_groups if h not in group_map]
+    for h in missing_pools:
+        logger.warning("pool group @%s not found in workspace — falling back to full user list", h)
+
+    if pool_ids:
+        user_map = list_users_from_groups(client, pool_ids)
+    else:
+        user_map = list_users(client)
 
     updates, warnings = build_updates(assignments, group_map, user_map)
     result.skipped.extend(warnings)

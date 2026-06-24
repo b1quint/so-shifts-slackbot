@@ -48,6 +48,10 @@ class Settings:
 
     summary_layout: SummaryLayout = field(default_factory=SummaryLayout)
 
+    # Slack user groups whose members are eligible to be on shift.
+    # Used to scope user lookup to a small pool instead of the whole workspace.
+    user_pool_groups: tuple[str, ...] = ("summit-sci", "os-team")
+
     # OS roster: names A12:A, initials B12:B → start_row=11 (0-based)
     os_roster_layout: RosterLayout = field(default_factory=lambda: RosterLayout(start_row=11))
 
